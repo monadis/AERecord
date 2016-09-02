@@ -236,44 +236,49 @@ private class AEStack {
         // setup main and background contexts
         mainContext = NSManagedObjectContext(concurrencyType: .MainQueueConcurrencyType)
         backgroundContext = NSManagedObjectContext(concurrencyType: .PrivateQueueConcurrencyType)
-        
+
         // create the coordinator and store
         persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: managedObjectModel)
         if let coordinator = persistentStoreCoordinator {
             try coordinator.addPersistentStoreWithType(storeType, configuration: configuration, URL: storeURL, options: options)
             mainContext.persistentStoreCoordinator = coordinator
-            backgroundContext.persistentStoreCoordinator = coordinator
             startReceivingContextNotifications()
         }
+			// http://code.tutsplus.com/ko/tutorials/core-data-and-swift-concurrency--cms-25118
+			backgroundContext.parentContext = mainContext
     }
     
     func destroyCoreDataStack(storeURL storeURL: NSURL = defaultURL) throws {
-        // must load this core data stack first
-        do {
-            try loadCoreDataStack(storeURL: storeURL) // because there is no persistentStoreCoordinator if destroyCoreDataStack is called before loadCoreDataStack
-            // also if we're in other stack currently that persistentStoreCoordinator doesn't know about this storeURL
-        } catch {
-            throw error
-        }
-        stopReceivingContextNotifications() // stop receiving notifications for these contexts
-        
-        // reset contexts
-        mainContext.reset()
-        backgroundContext.reset()
-        
-        // finally, remove persistent store
-        if let coordinator = persistentStoreCoordinator {
-            if let store = coordinator.persistentStoreForURL(storeURL) {
-                try coordinator.removePersistentStore(store)
-                try NSFileManager.defaultManager().removeItemAtURL(storeURL)
-            }
-        }
-        
-        // reset coordinator and model
-        persistentStoreCoordinator = nil
-        managedObjectModel = nil
-    }
-    
+		// must load this core data stack first
+		do {
+			try loadCoreDataStack(storeURL: storeURL) // because there is no persistentStoreCoordinator if destroyCoreDataStack is called before loadCoreDataStack
+			// also if we're in other stack currently that persistentStoreCoordinator doesn't know about this storeURL
+		} catch {
+			throw error
+		}
+		stopReceivingContextNotifications() // stop receiving notifications for these contexts
+
+		// reset contexts
+		mainContext.reset()
+		backgroundContext.reset()
+
+		// finally, remove persistent store
+		if let coordinator = persistentStoreCoordinator {
+
+			do {
+				// Works in the iOS9 journaling mode
+				// http://stackoverflow.com/questions/18277092/persistentstorecoordinator-sqlite-error-code522-not-an-error/20268379#20268379
+				try coordinator.destroyPersistentStoreAtURL(storeURL, withType: NSSQLiteStoreType, options: nil)
+			} catch {
+				throw error
+			}
+		}
+
+		// reset coordinator and model
+		persistentStoreCoordinator = nil
+		managedObjectModel = nil
+	}
+
     func truncateAllData(context context: NSManagedObjectContext? = nil) {
         let moc = context ?? defaultContext
         if let mom = managedObjectModel {
@@ -332,12 +337,6 @@ private class AEStack {
         }
     }
     
-    func mergeChangesFromNotification(notification: NSNotification, inContext context: NSManagedObjectContext) {
-        context.performBlock({ () -> Void in
-            context.mergeChangesFromContextDidSaveNotification(notification)
-        })
-    }
-    
     class func refreshObjects(objectIDS objectIDS: [NSManagedObjectID], mergeChanges: Bool, context: NSManagedObjectContext = AERecord.defaultContext) {
         for objectID in objectIDS {
             context.performBlockAndWait { () -> Void in
@@ -366,31 +365,15 @@ private class AEStack {
     func startReceivingContextNotifications() {
         let center = NSNotificationCenter.defaultCenter()
         
-        // Context Sync
-        center.addObserver(self, selector: #selector(AEStack.contextDidSave(_:)), name: NSManagedObjectContextDidSaveNotification, object: mainContext)
-        center.addObserver(self, selector: #selector(AEStack.contextDidSave(_:)), name: NSManagedObjectContextDidSaveNotification, object: backgroundContext)
-        
         // iCloud Support
         center.addObserver(self, selector: #selector(AEStack.storesWillChange(_:)), name: NSPersistentStoreCoordinatorStoresWillChangeNotification, object: persistentStoreCoordinator)
         center.addObserver(self, selector: #selector(AEStack.storesDidChange(_:)), name: NSPersistentStoreCoordinatorStoresDidChangeNotification, object: persistentStoreCoordinator)
         center.addObserver(self, selector: #selector(AEStack.willRemoveStore(_:)), name: NSPersistentStoreCoordinatorWillRemoveStoreNotification, object: persistentStoreCoordinator)
-        #if !(os(tvOS) || os(watchOS))
-            center.addObserver(self, selector: #selector(AEStack.persistentStoreDidImportUbiquitousContentChanges(_:)), name: NSPersistentStoreDidImportUbiquitousContentChangesNotification, object: persistentStoreCoordinator)
-        #endif
     }
     
     func stopReceivingContextNotifications() {
         let center = NSNotificationCenter.defaultCenter()
         center.removeObserver(self)
-    }
-    
-    // MARK: Context Sync
-    
-    @objc func contextDidSave(notification: NSNotification) {
-        if let context = notification.object as? NSManagedObjectContext {
-            let contextToRefresh = context == mainContext ? backgroundContext : mainContext
-            mergeChangesFromNotification(notification, inContext: contextToRefresh)
-        }
     }
     
     // MARK: iCloud Support
@@ -405,10 +388,6 @@ private class AEStack {
     
     @objc func willRemoveStore(notification: NSNotification) {
         // Does nothing here (for now).
-    }
-    
-    @objc func persistentStoreDidImportUbiquitousContentChanges(changeNotification: NSNotification) {
-        mergeChangesFromNotification(changeNotification, inContext: defaultContext)
     }
     
 }
@@ -436,7 +415,7 @@ public extension NSManagedObject {
     }
     
     /// An `NSEntityDescription` object describes an entity in Core Data.
-    class var entity: NSEntityDescription? {
+    class var entityDescription: NSEntityDescription? {
         return NSEntityDescription.entityForName(entityName, inManagedObjectContext: AERecord.defaultContext)
     }
     
