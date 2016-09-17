@@ -859,17 +859,17 @@ public extension NSManagedObject {
     class func countWithPredicate(predicate: NSPredicate? = nil, context: NSManagedObjectContext = AERecord.defaultContext) -> Int {
         let request = createFetchRequest(predicate: predicate)
         request.includesSubentities = false
-        
-        var error: NSError?
-        let count = context.countForFetchRequest(request, error: &error)
-        
-        if let err = error {
-            print(err)
-        }
-        
-        return count
-    }
-    
+
+		var error: NSError?
+		let count = context.countForFetchRequest(request, error: &error)
+
+		if let err = error {
+			print(err)
+		}
+
+		return count
+	}
+
     /**
         Counts all records for given attribute name and value.
         
